@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
-Name: sql-mongo-converter
-Version: 1.1.0
+Name: sql_mongo_converter
+Version: 1.1.1
 Summary: Convert SQL queries to MongoDB queries and vice versa.
 Home-page: https://github.com/yourusername/sql-mongo-converter
 Author: Son Nguyen

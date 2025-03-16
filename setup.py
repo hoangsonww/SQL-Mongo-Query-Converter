@@ -10,7 +10,7 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="sql_mongo_converter",
-    version="1.1.0",
+    version="1.1.1",
     description="Convert SQL queries to MongoDB queries and vice versa.",
     long_description=long_description,
     long_description_content_type="text/markdown",
