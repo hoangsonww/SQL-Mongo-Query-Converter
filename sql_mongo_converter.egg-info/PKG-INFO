@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: sql-mongo-converter
+Version: 1.0.0
+Summary: Convert SQL queries to MongoDB queries and vice versa.
+Home-page: https://github.com/yourusername/sql-mongo-converter
+Author: Son Nguyen
+Author-email: hoangson091104@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: sqlparse

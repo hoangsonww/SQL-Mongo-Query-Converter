@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+sql_mongo_converter/__init__.py
+sql_mongo_converter/converter.py
+sql_mongo_converter/mongo_to_sql.py
+sql_mongo_converter/sql_to_mongo.py
+sql_mongo_converter.egg-info/PKG-INFO
+sql_mongo_converter.egg-info/SOURCES.txt
+sql_mongo_converter.egg-info/dependency_links.txt
+sql_mongo_converter.egg-info/requires.txt
+sql_mongo_converter.egg-info/top_level.txt
+tests/test_converter.py
