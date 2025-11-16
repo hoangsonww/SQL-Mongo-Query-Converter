@@ -225,3 +225,145 @@ def escape_quotes(s: str) -> str:
     :return: The escaped string.
     """
     return s.replace("'", "''")
+
+
+def mongo_insert_to_sql(mongo_obj: dict) -> str:
+    """
+    Convert a MongoDB insert object to SQL INSERT statement.
+
+    Example input:
+    {
+      "collection": "users",
+      "operation": "insertOne",
+      "document": {"name": "Alice", "age": 30}
+    }
+
+    => Output:
+    INSERT INTO users (name, age) VALUES ('Alice', 30);
+
+    :param mongo_obj: The MongoDB insert dict.
+    :return: The SQL INSERT query as a string.
+    """
+    collection = mongo_obj.get("collection", "unknown_table")
+    operation = mongo_obj.get("operation", "insertOne")
+
+    if operation == "insertOne":
+        document = mongo_obj.get("document", {})
+        if not document:
+            return ""
+
+        columns = list(document.keys())
+        values = []
+        for col in columns:
+            val = document[col]
+            if isinstance(val, (int, float)):
+                values.append(str(val))
+            else:
+                values.append(f"'{escape_quotes(str(val))}'")
+
+        cols_str = ", ".join(columns)
+        vals_str = ", ".join(values)
+        return f"INSERT INTO {collection} ({cols_str}) VALUES ({vals_str});"
+
+    elif operation == "insertMany":
+        documents = mongo_obj.get("documents", [])
+        if not documents:
+            return ""
+
+        # Build multiple INSERT statements or one with multiple value sets
+        columns = list(documents[0].keys()) if documents else []
+        cols_str = ", ".join(columns)
+
+        all_values = []
+        for doc in documents:
+            values = []
+            for col in columns:
+                val = doc.get(col)
+                if isinstance(val, (int, float)):
+                    values.append(str(val))
+                else:
+                    values.append(f"'{escape_quotes(str(val))}'")
+            all_values.append(f"({', '.join(values)})")
+
+        return f"INSERT INTO {collection} ({cols_str}) VALUES {', '.join(all_values)};"
+
+    return ""
+
+
+def mongo_update_to_sql(mongo_obj: dict) -> str:
+    """
+    Convert a MongoDB update object to SQL UPDATE statement.
+
+    Example input:
+    {
+      "collection": "users",
+      "operation": "updateMany",
+      "filter": {"name": "Alice"},
+      "update": {"$set": {"age": 31, "status": "active"}}
+    }
+
+    => Output:
+    UPDATE users SET age = 31, status = 'active' WHERE name = 'Alice';
+
+    :param mongo_obj: The MongoDB update dict.
+    :return: The SQL UPDATE query as a string.
+    """
+    collection = mongo_obj.get("collection", "unknown_table")
+    filter_obj = mongo_obj.get("filter", {})
+    update_obj = mongo_obj.get("update", {})
+
+    # Extract $set operations
+    set_clause = update_obj.get("$set", {})
+    if not set_clause:
+        return ""
+
+    # Build SET clause
+    set_parts = []
+    for field, value in set_clause.items():
+        if isinstance(value, (int, float)):
+            set_parts.append(f"{field} = {value}")
+        else:
+            set_parts.append(f"{field} = '{escape_quotes(str(value))}'")
+
+    set_sql = ", ".join(set_parts)
+
+    # Build WHERE clause
+    where_sql = build_where_sql(filter_obj)
+
+    sql = f"UPDATE {collection} SET {set_sql}"
+    if where_sql:
+        sql += f" WHERE {where_sql}"
+    sql += ";"
+
+    return sql
+
+
+def mongo_delete_to_sql(mongo_obj: dict) -> str:
+    """
+    Convert a MongoDB delete object to SQL DELETE statement.
+
+    Example input:
+    {
+      "collection": "users",
+      "operation": "deleteMany",
+      "filter": {"age": {"$lt": 18}}
+    }
+
+    => Output:
+    DELETE FROM users WHERE age < 18;
+
+    :param mongo_obj: The MongoDB delete dict.
+    :return: The SQL DELETE query as a string.
+    """
+    collection = mongo_obj.get("collection", "unknown_table")
+    filter_obj = mongo_obj.get("filter", {})
+
+    # Build WHERE clause
+    where_sql = build_where_sql(filter_obj)
+
+    sql = f"DELETE FROM {collection}"
+    if where_sql:
+        sql += f" WHERE {where_sql}"
+    sql += ";"
+
+    return sql

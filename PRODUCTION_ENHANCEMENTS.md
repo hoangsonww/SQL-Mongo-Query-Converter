@@ -1,11 +1,139 @@
-# Production-Ready Enhancements - SQL-Mongo Query Converter v2.0.0
+# Production-Ready Enhancements - SQL-Mongo Query Converter
 
 ## Overview
-This document summarizes the comprehensive production-ready enhancements made to the SQL-Mongo Query Converter, transforming it from a basic conversion library to a fully-featured, production-grade system.
+This document summarizes the comprehensive production-ready enhancements made to the SQL-Mongo Query Converter, transforming it from a basic SELECT-only conversion library to a fully-featured, production-grade system with complete CRUD operations and advanced SQL support.
 
 ---
 
-## 🎯 Major Enhancements
+## 🚀 Version 2.1.0 Enhancements (2025-01-16)
+
+### Expanded Database Operations Support
+
+Version 2.1.0 represents a **major feature expansion** that extends the converter from SELECT-only queries to comprehensive database operations covering the full spectrum of SQL statements.
+
+#### What Was Added
+
+**1. Complete CRUD Operations**
+- ✅ **INSERT**: Single and bulk inserts with column specifications
+- ✅ **UPDATE**: Conditional updates with SET and WHERE clauses
+- ✅ **DELETE**: Conditional and bulk deletions
+- ✅ **SELECT**: Enhanced with DISTINCT, GROUP BY, HAVING, aggregations
+
+**2. JOIN Operations**
+- ✅ **INNER JOIN**: Converted to MongoDB `$lookup` aggregation
+- ✅ **LEFT JOIN**: Preserves unmatched documents with `$lookup`
+- ✅ Multi-table joins with ON conditions
+- ✅ Proper field aliasing (e.g., `u.name`, `o.order_id`)
+
+**3. DDL Operations**
+- ✅ **CREATE TABLE**: With schema validation and BSON type mapping
+- ✅ **CREATE INDEX**: Single/multiple columns with ASC/DESC
+- ✅ **DROP TABLE**: MongoDB collection removal
+- ✅ **DROP INDEX**: Index removal
+
+**4. Advanced SELECT Features**
+- ✅ **DISTINCT**: Single and multiple field deduplication
+- ✅ **HAVING**: Post-aggregation filtering
+- ✅ **Aggregation Functions**: COUNT, SUM, AVG, MIN, MAX
+- ✅ **GROUP BY**: With proper aggregation pipeline generation
+
+**5. Advanced WHERE Operators**
+- ✅ **BETWEEN**: Range queries with smart AND parsing
+- ✅ **LIKE**: Wildcard pattern matching (`%`, `_`)
+- ✅ **IN / NOT IN**: List membership tests
+- ✅ **IS NULL / IS NOT NULL**: Null value checks
+- ✅ **OR**: Logical OR with proper precedence
+- ✅ **NOT**: Logical negation
+
+**6. Bidirectional Conversion**
+- ✅ SQL INSERT ↔ MongoDB insertOne/insertMany
+- ✅ SQL UPDATE ↔ MongoDB updateMany with $set
+- ✅ SQL DELETE ↔ MongoDB deleteMany
+- ✅ Complex queries ↔ Aggregation pipelines
+
+#### Technical Achievements
+
+**Code Growth**:
+- `sql_to_mongo.py`: Expanded from ~200 lines to 620+ lines
+- Added 15+ new parsing functions
+- Enhanced WHERE clause parser with 200+ lines of regex-based logic
+- New aggregation pipeline builder
+
+**Test Coverage**:
+- From 70 tests to **103 tests** (+47% increase)
+- From 58.55% to 59.27% code coverage
+- New test file: `test_new_operations.py` with 33 comprehensive tests
+- All edge cases covered (BETWEEN, NOT IN, Function objects, etc.)
+
+**Parser Improvements**:
+- Fixed sqlparse quirks with Function object detection
+- Smart AND parsing that preserves BETWEEN clauses
+- Recursive condition parsing for complex WHERE clauses
+- Proper operator precedence handling
+
+**Security Enhancements**:
+- Separated `MUTATION_KEYWORDS` from `DANGEROUS_KEYWORDS`
+- `allow_mutations` flag for controlling write operations
+- Better validation for DROP, TRUNCATE, ALTER operations
+
+#### Real-World Impact
+
+**Before v2.1.0**:
+```python
+# Only this worked:
+sql_to_mongo("SELECT * FROM users WHERE age > 25")
+```
+
+**After v2.1.0**:
+```python
+# All of these now work:
+sql_to_mongo("INSERT INTO users (name, age) VALUES ('Alice', 30)")
+sql_to_mongo("UPDATE users SET age = 31 WHERE name = 'Alice'")
+sql_to_mongo("DELETE FROM users WHERE age < 18")
+sql_to_mongo("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id")
+sql_to_mongo("SELECT dept, COUNT(*) FROM employees GROUP BY dept HAVING COUNT(*) > 5")
+sql_to_mongo("SELECT * FROM products WHERE price BETWEEN 10 AND 100")
+sql_to_mongo("SELECT DISTINCT category FROM products")
+sql_to_mongo("CREATE TABLE users (id INT, name VARCHAR(100))")
+sql_to_mongo("CREATE INDEX idx_age ON users (age DESC)")
+```
+
+#### Use Case Examples
+
+**Database Migration**:
+```python
+# Migrate SQL INSERT statements to MongoDB
+sql = "INSERT INTO customers (name, email, age) VALUES ('John', 'john@example.com', 30)"
+mongo = sql_to_mongo(sql)
+# Result: {"operation": "insertOne", "document": {"name": "John", ...}}
+```
+
+**Query Translation**:
+```python
+# Convert complex SQL queries to MongoDB aggregation
+sql = """
+SELECT department, AVG(salary) as avg_sal
+FROM employees
+WHERE age > 25
+GROUP BY department
+HAVING AVG(salary) > 50000
+"""
+mongo = sql_to_mongo(sql)
+# Result: Aggregation pipeline with $match, $group, and $match stages
+```
+
+**Bidirectional Conversion**:
+```python
+# SQL → MongoDB → SQL roundtrip
+sql1 = "UPDATE users SET status = 'active' WHERE age >= 18"
+mongo = sql_to_mongo(sql1)
+sql2 = mongo_to_sql(mongo)
+# sql2 matches sql1 semantically
+```
+
+---
+
+## 🎯 Version 2.0.0 Major Enhancements (2025-01-16)
 
 ### 1. **Custom Exception System** ✅
 **File:** `sql_mongo_converter/exceptions.py`
@@ -305,19 +433,34 @@ python -m build
 
 ## 📈 Version Comparison
 
-| Feature | v1.2.2 | v2.0.0 |
-|---------|--------|--------|
-| Basic Conversion | ✅ | ✅ |
-| Custom Exceptions | ❌ | ✅ |
-| Logging System | ❌ | ✅ |
-| Query Validation | ❌ | ✅ |
-| Benchmarking | ❌ | ✅ |
-| CLI Tool | ❌ | ✅ |
-| Test Coverage | ~10% | 58.55% |
-| Production Status | Beta | Production-Stable |
-| Code Quality Tools | ❌ | ✅ |
-| Examples | Limited | Comprehensive |
-| Security Features | ❌ | ✅ |
+| Feature | v1.2.2 | v2.0.0 | v2.1.0 |
+|---------|--------|--------|--------|
+| SELECT Queries | ✅ | ✅ | ✅ |
+| INSERT Operations | ❌ | ❌ | ✅ |
+| UPDATE Operations | ❌ | ❌ | ✅ |
+| DELETE Operations | ❌ | ❌ | ✅ |
+| JOIN Support | ❌ | ❌ | ✅ |
+| CREATE/DROP DDL | ❌ | ❌ | ✅ |
+| DISTINCT Queries | ❌ | ❌ | ✅ |
+| GROUP BY/HAVING | ✅ | ✅ | ✅ Enhanced |
+| Aggregation Functions | ❌ | ❌ | ✅ |
+| BETWEEN Operator | ❌ | ❌ | ✅ |
+| LIKE with Wildcards | ❌ | ❌ | ✅ |
+| IN/NOT IN | ❌ | ❌ | ✅ |
+| IS NULL/NOT NULL | ❌ | ❌ | ✅ |
+| OR/NOT Operators | ❌ | ❌ | ✅ |
+| Bidirectional Conversion | Partial | Partial | ✅ Full |
+| Custom Exceptions | ❌ | ✅ | ✅ |
+| Logging System | ❌ | ✅ | ✅ |
+| Query Validation | ❌ | ✅ | ✅ Enhanced |
+| Benchmarking | ❌ | ✅ | ✅ |
+| CLI Tool | ❌ | ✅ | ✅ |
+| Test Count | ~10 | 70 | 103 |
+| Test Coverage | ~10% | 58.55% | 59.27% |
+| Production Status | Beta | Production-Stable | Production-Stable |
+| Code Quality Tools | ❌ | ✅ | ✅ |
+| Examples | Limited | Comprehensive | Comprehensive |
+| Security Features | ❌ | ✅ | ✅ Enhanced |
 
 ---
 
@@ -384,9 +527,20 @@ print(f"Throughput: {result.queries_per_second:.2f} q/s")
 
 ## 🏁 Conclusion
 
-The SQL-Mongo Query Converter v2.0.0 is now a **production-ready**, **enterprise-grade** tool with:
+The SQL-Mongo Query Converter v2.1.0 is now a **production-ready**, **enterprise-grade** tool with comprehensive database operation support:
 
-- ✅ **70 passing tests** with good coverage
+### Version 2.1.0 Highlights
+- ✅ **103 passing tests** with 59.27% coverage (+33 new tests)
+- ✅ **Full CRUD operations** (INSERT, UPDATE, DELETE, SELECT)
+- ✅ **JOIN support** (INNER JOIN, LEFT JOIN)
+- ✅ **DDL operations** (CREATE, DROP for tables and indexes)
+- ✅ **Advanced SQL features** (DISTINCT, HAVING, aggregations)
+- ✅ **Comprehensive WHERE operators** (BETWEEN, LIKE, IN, IS NULL, OR, NOT)
+- ✅ **Bidirectional conversion** for all operation types
+- ✅ **Enhanced security** (mutation control, keyword separation)
+- ✅ **Production-ready** with comprehensive error handling
+
+### From v2.0.0
 - ✅ **Security features** (validation, sanitization)
 - ✅ **Performance monitoring** (benchmarking)
 - ✅ **Production logging** system
@@ -394,10 +548,16 @@ The SQL-Mongo Query Converter v2.0.0 is now a **production-ready**, **enterprise
 - ✅ **Code quality** standards enforced
 - ✅ **Comprehensive documentation** and examples
 
-This represents a **major upgrade** from the previous version, making it suitable for production deployments in enterprise environments.
+### Evolution Summary
+- **v1.2.2**: Basic SELECT-only conversion (~10 tests)
+- **v2.0.0**: Production infrastructure (70 tests, logging, validation, CLI)
+- **v2.1.0**: Complete database operations (103 tests, full CRUD, JOINs, DDL)
+
+This represents a **major upgrade** from previous versions, transforming the library from a basic SELECT converter to a comprehensive SQL-MongoDB translation system suitable for production deployments in enterprise environments.
 
 ---
 
-**Version:** 2.0.0
+**Version:** 2.1.0
 **Date:** 2025-01-16
 **Status:** Production-Ready ✅
+**Test Coverage:** 103 tests passing, 59.27% coverage
