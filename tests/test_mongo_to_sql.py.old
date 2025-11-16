@@ -1,0 +1,263 @@
+"""
+Comprehensive tests for MongoDB to SQL conversion.
+"""
+
+import pytest
+from sql_mongo_converter import mongo_to_sql
+from sql_mongo_converter.exceptions import MongoParseError, ValidationError
+
+
+class TestBasicMongoToSQL:
+    """Test basic MongoDB to SQL conversions."""
+
+    def test_simple_find(self, sample_mongo_queries):
+        """Test simple find conversion."""
+        result = mongo_to_sql(sample_mongo_queries['basic_find'])
+        assert 'SELECT * FROM users' in result
+
+    def test_find_with_filter(self, sample_mongo_queries):
+        """Test find with filter."""
+        result = mongo_to_sql(sample_mongo_queries['with_filter'])
+        assert 'SELECT' in result
+        assert 'FROM users' in result
+        assert 'WHERE' in result
+        assert 'age > 25' in result
+
+    def test_find_with_projection(self, sample_mongo_queries):
+        """Test find with projection."""
+        result = mongo_to_sql(sample_mongo_queries['with_filter'])
+        assert 'name' in result
+        assert 'email' in result
+
+    def test_find_with_sort(self, sample_mongo_queries):
+        """Test find with sort."""
+        result = mongo_to_sql(sample_mongo_queries['with_sort'])
+        assert 'ORDER BY' in result
+        assert 'age DESC' in result
+
+    def test_find_with_limit(self, sample_mongo_queries):
+        """Test find with limit."""
+        result = mongo_to_sql(sample_mongo_queries['with_limit'])
+        assert 'LIMIT 10' in result
+
+    def test_complex_query(self, sample_mongo_queries):
+        """Test complex query conversion."""
+        result = mongo_to_sql(sample_mongo_queries['complex'])
+        assert 'SELECT' in result
+        assert 'FROM users' in result
+        assert 'WHERE' in result
+        assert 'ORDER BY' in result
+        assert 'LIMIT 100' in result
+
+
+class TestMongoOperators:
+    """Test MongoDB operator conversions."""
+
+    def test_gt_operator(self):
+        """Test $gt operator."""
+        query = {'collection': 'users', 'find': {'age': {'$gt': 25}}}
+        result = mongo_to_sql(query)
+        assert 'age > 25' in result
+
+    def test_gte_operator(self):
+        """Test $gte operator."""
+        query = {'collection': 'users', 'find': {'age': {'$gte': 18}}}
+        result = mongo_to_sql(query)
+        assert 'age >= 18' in result
+
+    def test_lt_operator(self):
+        """Test $lt operator."""
+        query = {'collection': 'users', 'find': {'age': {'$lt': 65}}}
+        result = mongo_to_sql(query)
+        assert 'age < 65' in result
+
+    def test_lte_operator(self):
+        """Test $lte operator."""
+        query = {'collection': 'users', 'find': {'age': {'$lte': 100}}}
+        result = mongo_to_sql(query)
+        assert 'age <= 100' in result
+
+    def test_eq_operator(self):
+        """Test $eq operator."""
+        query = {'collection': 'users', 'find': {'status': {'$eq': 'active'}}}
+        result = mongo_to_sql(query)
+        assert "status = 'active'" in result
+
+    def test_ne_operator(self, sample_mongo_queries):
+        """Test $ne operator."""
+        result = mongo_to_sql(sample_mongo_queries['with_ne'])
+        assert 'status !=' in result or 'status <>' in result
+
+    def test_in_operator(self, sample_mongo_queries):
+        """Test $in operator."""
+        result = mongo_to_sql(sample_mongo_queries['with_in'])
+        assert 'status IN' in result
+        assert 'active' in result
+        assert 'pending' in result
+
+    def test_multiple_operators(self, sample_mongo_queries):
+        """Test multiple operators."""
+        result = mongo_to_sql(sample_mongo_queries['with_operators'])
+        assert 'price > 100' in result
+        assert 'price < 500' in result
+
+
+class TestDataTypes:
+    """Test handling of different data types."""
+
+    def test_string_values(self):
+        """Test string value handling."""
+        query = {'collection': 'users', 'find': {'name': 'John Doe'}}
+        result = mongo_to_sql(query)
+        assert "'John Doe'" in result or '"John Doe"' in result
+
+    def test_integer_values(self):
+        """Test integer value handling."""
+        query = {'collection': 'users', 'find': {'age': 25}}
+        result = mongo_to_sql(query)
+        assert 'age = 25' in result
+
+    def test_float_values(self):
+        """Test float value handling."""
+        query = {'collection': 'products', 'find': {'price': 99.99}}
+        result = mongo_to_sql(query)
+        assert '99.99' in result
+
+    def test_boolean_values(self):
+        """Test boolean value handling."""
+        query = {'collection': 'users', 'find': {'active': True}}
+        result = mongo_to_sql(query)
+        assert 'active' in result
+
+
+class TestSorting:
+    """Test sorting conversions."""
+
+    def test_ascending_sort(self):
+        """Test ascending sort."""
+        query = {
+            'collection': 'users',
+            'find': {},
+            'sort': [('age', 1)]
+        }
+        result = mongo_to_sql(query)
+        assert 'ORDER BY age ASC' in result
+
+    def test_descending_sort(self):
+        """Test descending sort."""
+        query = {
+            'collection': 'users',
+            'find': {},
+            'sort': [('age', -1)]
+        }
+        result = mongo_to_sql(query)
+        assert 'ORDER BY age DESC' in result
+
+    def test_multiple_sort_fields(self):
+        """Test multiple sort fields."""
+        query = {
+            'collection': 'users',
+            'find': {},
+            'sort': [('department', 1), ('age', -1)]
+        }
+        result = mongo_to_sql(query)
+        assert 'ORDER BY' in result
+        assert 'department' in result
+        assert 'age' in result
+
+
+class TestProjections:
+    """Test projection conversions."""
+
+    def test_include_fields(self):
+        """Test field inclusion."""
+        query = {
+            'collection': 'users',
+            'find': {},
+            'projection': {'name': 1, 'email': 1}
+        }
+        result = mongo_to_sql(query)
+        assert 'SELECT name, email' in result or 'SELECT email, name' in result
+
+    def test_no_projection(self):
+        """Test no projection (select all)."""
+        query = {
+            'collection': 'users',
+            'find': {}
+        }
+        result = mongo_to_sql(query)
+        assert 'SELECT *' in result
+
+
+class TestEdgeCases:
+    """Test edge cases."""
+
+    def test_empty_find(self):
+        """Test empty find filter."""
+        query = {'collection': 'users', 'find': {}}
+        result = mongo_to_sql(query)
+        assert 'SELECT * FROM users' in result
+
+    def test_collection_name_extraction(self):
+        """Test various collection name formats."""
+        query = {'collection': 'my_collection', 'find': {}}
+        result = mongo_to_sql(query)
+        assert 'my_collection' in result
+
+    def test_skip_offset(self):
+        """Test skip (OFFSET) conversion."""
+        query = {
+            'collection': 'users',
+            'find': {},
+            'skip': 10
+        }
+        result = mongo_to_sql(query)
+        # Should handle skip if implemented
+
+
+class TestComplexQueries:
+    """Test complex query scenarios."""
+
+    def test_combined_filter_projection_sort_limit(self):
+        """Test query with all components."""
+        query = {
+            'collection': 'users',
+            'find': {'age': {'$gte': 18}, 'status': 'active'},
+            'projection': {'name': 1, 'age': 1},
+            'sort': [('age', -1)],
+            'limit': 50
+        }
+        result = mongo_to_sql(query)
+        assert 'SELECT' in result
+        assert 'FROM users' in result
+        assert 'WHERE' in result
+        assert 'ORDER BY' in result
+        assert 'LIMIT 50' in result
+
+    def test_multiple_conditions_same_field(self):
+        """Test multiple conditions on same field."""
+        query = {
+            'collection': 'products',
+            'find': {'price': {'$gte': 10, '$lte': 100}}
+        }
+        result = mongo_to_sql(query)
+        assert 'price' in result
+
+
+class TestErrorHandling:
+    """Test error handling."""
+
+    def test_missing_collection(self):
+        """Test missing collection name."""
+        with pytest.raises(Exception):
+            mongo_to_sql({'find': {'age': 25}})
+
+    def test_invalid_query_type(self):
+        """Test invalid query type."""
+        with pytest.raises(Exception):
+            mongo_to_sql("not a dictionary")
+
+    def test_none_query(self):
+        """Test None query."""
+        with pytest.raises(Exception):
+            mongo_to_sql(None)

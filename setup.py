@@ -10,21 +10,52 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="sql_mongo_converter",
-    version="1.2.2",
-    description="Convert SQL queries to MongoDB queries and vice versa.",
+    version="2.0.0",
+    description="Production-ready converter for SQL and MongoDB queries with validation, logging, and CLI",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Son Nguyen",
     author_email="hoangson091104@gmail.com",
     url="https://github.com/hoangsonww/SQL-Mongo-Query-Converter",
-    packages=find_packages(),
+    packages=find_packages(exclude=["tests", "tests.*"]),
     install_requires=[
-        "sqlparse",
+        "sqlparse>=0.4.0",
     ],
+    extras_require={
+        'dev': [
+            'pytest>=7.0.0',
+            'pytest-cov>=4.0.0',
+            'pytest-benchmark>=4.0.0',
+            'mypy>=1.0.0',
+            'black>=23.0.0',
+            'flake8>=6.0.0',
+            'isort>=5.12.0',
+            'pylint>=3.0.0',
+        ],
+        'cli': [
+            'click>=8.0.0',
+            'colorama>=0.4.6',
+        ],
+    },
+    entry_points={
+        'console_scripts': [
+            'sql-mongo-converter=sql_mongo_converter.cli:main',
+        ],
+    },
     classifiers=[
-        "Programming Language :: Python :: 3",
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
+        "Topic :: Database",
+        "Topic :: Software Development :: Libraries :: Python Modules",
     ],
     python_requires=">=3.7",
 )
