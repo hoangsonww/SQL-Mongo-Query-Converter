@@ -5,8 +5,10 @@ from sqlparse.sql import (
     Where,
     Token,
     Parenthesis,
+    Function,
 )
 from sqlparse.tokens import Keyword, DML
+import re
 
 
 def sql_select_to_mongo(sql_query: str):
@@ -186,17 +188,23 @@ def extract_columns(token):
     If token is an IdentifierList => multiple columns
     If token is an Identifier => single column
     If token is '*' => wildcard
+    Also handles aggregate functions like COUNT, SUM, AVG, etc.
 
-    Return a list of columns.
+    Return a list of columns or aggregate expressions.
     If no columns found, return an empty list.
 
     :param token: The SQL token to extract columns from.
-    :return: A list of columns.
+    :return: A list of columns or aggregate expressions.
     """
-    from sqlparse.sql import IdentifierList, Identifier
+    from sqlparse.sql import IdentifierList, Identifier, Function
     if isinstance(token, IdentifierList):
-        return [str(ident).strip() for ident in token.get_identifiers()]
+        cols = []
+        for ident in token.get_identifiers():
+            cols.append(str(ident).strip())
+        return cols
     elif isinstance(token, Identifier):
+        return [str(token).strip()]
+    elif isinstance(token, Function):
         return [str(token).strip()]
     else:
         raw = str(token).strip()
@@ -409,3 +417,885 @@ def build_mongo_query(table_name, columns, where_clause, order_by, group_by, lim
         group_pipeline["$group"]["_id"] = _id_obj
         query_obj["group"] = group_pipeline
     return query_obj
+
+
+def sql_insert_to_mongo(sql_query: str):
+    """
+    Convert INSERT INTO ... VALUES ... to MongoDB insertOne/insertMany format.
+
+    Examples:
+      INSERT INTO users (name, age) VALUES ('Alice', 30)
+      => {"collection": "users", "operation": "insertOne", "document": {"name": "Alice", "age": 30}}
+
+      INSERT INTO users VALUES ('Bob', 25)
+      => {"collection": "users", "operation": "insertOne", "document": {"col0": "Bob", "col1": 25}}
+
+    :param sql_query: The SQL INSERT query as a string.
+    :return: A MongoDB insert dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    table_name, columns, values = parse_insert_statement(statement)
+
+    if not table_name or not values:
+        return {}
+
+    # Build document(s)
+    documents = []
+    for value_set in values:
+        doc = {}
+        if columns:
+            # Match columns with values
+            for i, col in enumerate(columns):
+                if i < len(value_set):
+                    doc[col] = value_set[i]
+        else:
+            # No columns specified, use generic names
+            for i, val in enumerate(value_set):
+                doc[f"col{i}"] = val
+        documents.append(doc)
+
+    # Return format
+    result = {
+        "collection": table_name,
+        "operation": "insertMany" if len(documents) > 1 else "insertOne",
+    }
+
+    if len(documents) == 1:
+        result["document"] = documents[0]
+    else:
+        result["documents"] = documents
+
+    return result
+
+
+def parse_insert_statement(statement):
+    """
+    Parse INSERT INTO table (columns) VALUES (values) [, (values)]
+
+    Returns:
+      table_name, columns_list, values_list_of_lists
+
+    :param statement: The parsed SQL statement.
+    :return: A tuple containing table_name, columns, values.
+    """
+    table_name = None
+    columns = []
+    values = []
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    i = 0
+    found_insert = False
+    reading_into = False
+
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Detect INSERT
+        if token.ttype is DML and token.value.upper() == "INSERT":
+            found_insert = True
+            i += 1
+            continue
+
+        # Detect INTO
+        if found_insert and token.ttype is Keyword and token.value.upper() == "INTO":
+            reading_into = True
+            i += 1
+            continue
+
+        # Parse table name and possibly columns after INTO
+        if reading_into and not table_name:
+            if token.ttype is not Keyword:
+                # Check if it's a Function (sqlparse treats "table(cols)" as Function)
+                if isinstance(token, Function):
+                    # Extract table name and columns from Function
+                    func_str = str(token)
+                    if '(' in func_str:
+                        table_name = func_str.split('(')[0].strip()
+                        # Parse columns from the parenthesis part
+                        cols_part = func_str[func_str.index('(')+1:func_str.rindex(')')]
+                        columns = [c.strip().strip('"').strip("'") for c in cols_part.split(',')]
+                    else:
+                        table_name = func_str.strip()
+                elif isinstance(token, Identifier):
+                    table_name = str(token.get_real_name()).strip()
+                elif isinstance(token, Parenthesis):
+                    # This is the columns list without table
+                    columns = parse_columns_list(token)
+                else:
+                    # Simple table name
+                    table_name = str(token).strip()
+                reading_into = False
+            i += 1
+            continue
+
+        # Handle standalone parenthesis for columns
+        if table_name and isinstance(token, Parenthesis) and not columns:
+            # Check if this is before VALUES - it's columns
+            if i + 1 < len(tokens):
+                next_tok = tokens[i + 1]
+                if next_tok.ttype is Keyword and next_tok.value.upper() == "VALUES":
+                    columns = parse_columns_list(token)
+            i += 1
+            continue
+
+        # Detect VALUES - could be keyword or Values object
+        if (token.ttype is Keyword and token.value.upper() == "VALUES") or \
+           (hasattr(token, '__class__') and token.__class__.__name__ == 'Values'):
+            # If it's a Values object, parse it directly
+            if token.__class__.__name__ == 'Values':
+                # Extract value sets from Values object
+                values_str = str(token)
+                # Remove 'VALUES ' prefix if present
+                if values_str.upper().startswith('VALUES'):
+                    values_str = values_str[6:].strip()
+                # Parse all parenthesis groups
+                import re
+                # Find all (...) groups
+                paren_groups = re.findall(r'\([^)]+\)', values_str)
+                for group in paren_groups:
+                    # Create a Parenthesis-like string and parse
+                    value_set = parse_values_from_string(group)
+                    if value_set:
+                        values.append(value_set)
+            i += 1
+            continue
+
+        # Parse individual value parentheses
+        if isinstance(token, Parenthesis) and table_name:
+            value_set = parse_values_list(token)
+            if value_set:
+                values.append(value_set)
+            i += 1
+            continue
+
+        i += 1
+
+    return table_name, columns, values
+
+
+def parse_values_from_string(paren_str: str):
+    """
+    Parse values from a parenthesis string like '(val1, val2)'.
+
+    :param paren_str: String with parentheses.
+    :return: List of values.
+    """
+    content = paren_str.strip()
+    if content.startswith('(') and content.endswith(')'):
+        content = content[1:-1]
+
+    values = []
+    parts = re.split(r",(?=(?:[^'\"]*['\"][^'\"]*['\"])*[^'\"]*$)", content)
+    for part in parts:
+        part = part.strip()
+        if (part.startswith("'") and part.endswith("'")) or (part.startswith('"') and part.endswith('"')):
+            values.append(part[1:-1])
+        else:
+            values.append(convert_value(part))
+
+    return values
+
+
+def parse_columns_list(parenthesis_token):
+    """
+    Parse (col1, col2, col3) into a list of column names.
+
+    :param parenthesis_token: The parenthesis token containing columns.
+    :return: A list of column names.
+    """
+    content = str(parenthesis_token).strip()
+    # Remove outer parentheses
+    if content.startswith('(') and content.endswith(')'):
+        content = content[1:-1]
+
+    # Split by comma
+    cols = [c.strip().strip('"').strip("'") for c in content.split(',')]
+    return cols
+
+
+def parse_values_list(parenthesis_token):
+    """
+    Parse (val1, val2, val3) into a list of values.
+
+    :param parenthesis_token: The parenthesis token containing values.
+    :return: A list of values.
+    """
+    content = str(parenthesis_token).strip()
+    # Remove outer parentheses
+    if content.startswith('(') and content.endswith(')'):
+        content = content[1:-1]
+
+    # Parse values - handle strings in quotes
+    values = []
+    # Use regex to split by comma but respect quotes
+    parts = re.split(r",(?=(?:[^'\"]*['\"][^'\"]*['\"])*[^'\"]*$)", content)
+    for part in parts:
+        part = part.strip()
+        # Remove quotes if present
+        if (part.startswith("'") and part.endswith("'")) or (part.startswith('"') and part.endswith('"')):
+            values.append(part[1:-1])
+        else:
+            # Try to convert to number
+            values.append(convert_value(part))
+
+    return values
+
+
+def sql_update_to_mongo(sql_query: str):
+    """
+    Convert UPDATE ... SET ... WHERE ... to MongoDB updateOne/updateMany format.
+
+    Example:
+      UPDATE users SET age = 31, status = 'active' WHERE name = 'Alice'
+      => {
+           "collection": "users",
+           "operation": "updateMany",
+           "filter": {"name": "Alice"},
+           "update": {"$set": {"age": 31, "status": "active"}}
+         }
+
+    :param sql_query: The SQL UPDATE query as a string.
+    :return: A MongoDB update dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    table_name, set_clause, where_clause = parse_update_statement(statement)
+
+    if not table_name or not set_clause:
+        return {}
+
+    result = {
+        "collection": table_name,
+        "operation": "updateMany",
+        "filter": where_clause or {},
+        "update": {"$set": set_clause}
+    }
+
+    return result
+
+
+def parse_update_statement(statement):
+    """
+    Parse UPDATE table SET col1=val1, col2=val2 WHERE conditions
+
+    Returns:
+      table_name, set_dict, where_dict
+
+    :param statement: The parsed SQL statement.
+    :return: A tuple containing table_name, set_clause, where_clause.
+    """
+    table_name = None
+    set_clause = {}
+    where_clause = {}
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    i = 0
+    found_update = False
+    reading_set = False
+
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Detect UPDATE
+        if token.ttype is DML and token.value.upper() == "UPDATE":
+            found_update = True
+            i += 1
+            continue
+
+        # Parse table name after UPDATE
+        if found_update and not table_name:
+            if token.ttype is not Keyword:
+                if isinstance(token, Identifier):
+                    table_name = str(token.get_real_name()).strip()
+                else:
+                    table_name = str(token).strip()
+            i += 1
+            continue
+
+        # Detect SET
+        if token.ttype is Keyword and token.value.upper() == "SET":
+            reading_set = True
+            i += 1
+            continue
+
+        # Parse SET clause
+        if reading_set and not isinstance(token, Where) and token.ttype is not Keyword:
+            set_clause = parse_set_clause(str(token))
+            reading_set = False
+            i += 1
+            continue
+
+        # Parse WHERE
+        if isinstance(token, Where):
+            where_clause = extract_where_clause(token)
+            i += 1
+            continue
+
+        if token.ttype is Keyword and token.value.upper() == "WHERE":
+            if i + 1 < len(tokens):
+                next_token = tokens[i + 1]
+                if isinstance(next_token, Where):
+                    where_clause = extract_where_clause(next_token)
+                    i += 2
+                    continue
+                else:
+                    where_text = str(next_token).strip()
+                    where_clause = parse_where_conditions(where_text)
+                    i += 2
+                    continue
+            i += 1
+            continue
+
+        i += 1
+
+    return table_name, set_clause, where_clause
+
+
+def parse_set_clause(text: str):
+    """
+    Parse "col1 = val1, col2 = val2" into a dict.
+
+    :param text: The SET clause text.
+    :return: A dict of column-value pairs.
+    """
+    text = text.strip().rstrip(";")
+    if not text:
+        return {}
+
+    # Split by comma
+    parts = re.split(r",(?=(?:[^'\"]*['\"][^'\"]*['\"])*[^'\"]*$)", text)
+    result = {}
+
+    for part in parts:
+        part = part.strip()
+        if '=' in part:
+            field, val = part.split('=', 1)
+            field = field.strip()
+            val = val.strip().strip("'").strip('"')
+            result[field] = convert_value(val)
+
+    return result
+
+
+def sql_delete_to_mongo(sql_query: str):
+    """
+    Convert DELETE FROM ... WHERE ... to MongoDB deleteMany format.
+
+    Example:
+      DELETE FROM users WHERE age < 18
+      => {
+           "collection": "users",
+           "operation": "deleteMany",
+           "filter": {"age": {"$lt": 18}}
+         }
+
+    :param sql_query: The SQL DELETE query as a string.
+    :return: A MongoDB delete dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    table_name, where_clause = parse_delete_statement(statement)
+
+    if not table_name:
+        return {}
+
+    result = {
+        "collection": table_name,
+        "operation": "deleteMany",
+        "filter": where_clause or {}
+    }
+
+    return result
+
+
+def parse_delete_statement(statement):
+    """
+    Parse DELETE FROM table WHERE conditions
+
+    Returns:
+      table_name, where_dict
+
+    :param statement: The parsed SQL statement.
+    :return: A tuple containing table_name and where_clause.
+    """
+    table_name = None
+    where_clause = {}
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    i = 0
+    found_delete = False
+    reading_from = False
+
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Detect DELETE
+        if token.ttype is DML and token.value.upper() == "DELETE":
+            found_delete = True
+            i += 1
+            continue
+
+        # Detect FROM
+        if found_delete and token.ttype is Keyword and token.value.upper() == "FROM":
+            reading_from = True
+            i += 1
+            continue
+
+        # Parse table name after FROM
+        if reading_from and not table_name:
+            if token.ttype is not Keyword:
+                if isinstance(token, Identifier):
+                    table_name = str(token.get_real_name()).strip()
+                else:
+                    table_name = str(token).strip()
+                reading_from = False
+            i += 1
+            continue
+
+        # Parse WHERE
+        if isinstance(token, Where):
+            where_clause = extract_where_clause(token)
+            i += 1
+            continue
+
+        if token.ttype is Keyword and token.value.upper() == "WHERE":
+            if i + 1 < len(tokens):
+                next_token = tokens[i + 1]
+                if isinstance(next_token, Where):
+                    where_clause = extract_where_clause(next_token)
+                    i += 2
+                    continue
+                else:
+                    where_text = str(next_token).strip()
+                    where_clause = parse_where_conditions(where_text)
+                    i += 2
+                    continue
+            i += 1
+            continue
+
+        i += 1
+
+    return table_name, where_clause
+
+
+def sql_join_to_mongo(sql_query: str):
+    """
+    Convert SQL JOIN queries to MongoDB $lookup aggregation pipeline.
+
+    Example:
+      SELECT u.name, o.total FROM users u INNER JOIN orders o ON u.id = o.user_id
+      => {
+           "collection": "users",
+           "operation": "aggregate",
+           "pipeline": [
+             {
+               "$lookup": {
+                 "from": "orders",
+                 "localField": "id",
+                 "foreignField": "user_id",
+                 "as": "joined_orders"
+               }
+             },
+             {"$project": {"name": 1, "joined_orders.total": 1}}
+           ]
+         }
+
+    :param sql_query: The SQL JOIN query as a string.
+    :return: A MongoDB aggregation pipeline dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    result = parse_join_statement(statement)
+    return result
+
+
+def parse_join_statement(statement):
+    """
+    Parse SQL JOIN statement.
+
+    Returns:
+      MongoDB aggregation pipeline with $lookup
+
+    :param statement: The parsed SQL statement.
+    :return: A dict representing the MongoDB aggregation pipeline.
+    """
+    from sqlparse.sql import Comparison
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    main_table = None
+    join_table = None
+    join_type = "INNER"
+    local_field = None
+    foreign_field = None
+    columns = []
+
+    # Simpler approach using enumeration
+    for i, token in enumerate(tokens):
+        # Detect SELECT and parse columns
+        if token.ttype is DML and token.value.upper() == "SELECT":
+            # Next non-keyword token is columns
+            if i + 1 < len(tokens) and tokens[i+1].ttype is not Keyword:
+                possible_cols = extract_columns(tokens[i+1])
+                if possible_cols:
+                    columns = possible_cols
+
+        # Get main table after FROM
+        if i > 0 and tokens[i-1].ttype is Keyword and tokens[i-1].value.upper() == "FROM":
+            if isinstance(token, Identifier):
+                table_str = str(token).strip()
+                main_table = table_str.split()[0]
+            else:
+                table_str = str(token).strip()
+                main_table = table_str.split()[0]
+
+        # Detect JOIN and get join table
+        if token.ttype is Keyword and 'JOIN' in token.value.upper():
+            join_type = token.value.upper().replace(' ', '')
+            # Next token should be the table name
+            if i + 1 < len(tokens) and isinstance(tokens[i+1], Identifier):
+                table_str = str(tokens[i+1]).strip()
+                join_table = table_str.split()[0]
+
+        # Handle Comparison objects for ON clause
+        if isinstance(token, Comparison):
+            on_condition = str(token).strip()
+            if '=' in on_condition:
+                left, right = on_condition.split('=', 1)
+                left = left.strip()
+                right = right.strip()
+
+                # Remove table aliases (e.g., "u.id" -> "id")
+                local_field = left.split('.', 1)[1] if '.' in left else left
+                foreign_field = right.split('.', 1)[1] if '.' in right else right
+
+    # Build MongoDB $lookup pipeline
+    if not main_table or not join_table:
+        return {}
+
+    pipeline = []
+
+    # Add $lookup stage
+    lookup_stage = {
+        "$lookup": {
+            "from": join_table,
+            "localField": local_field or "_id",
+            "foreignField": foreign_field or "_id",
+            "as": f"joined_{join_table}"
+        }
+    }
+    pipeline.append(lookup_stage)
+
+    # For LEFT JOIN, add $unwind with preserveNullAndEmptyArrays
+    if 'LEFT' in join_type:
+        pipeline.append({
+            "$unwind": {
+                "path": f"$joined_{join_table}",
+                "preserveNullAndEmptyArrays": True
+            }
+        })
+    else:
+        pipeline.append({
+            "$unwind": f"$joined_{join_table}"
+        })
+
+    # Add projection if columns specified
+    if columns and '*' not in columns:
+        project = {}
+        for col in columns:
+            # Handle aliased columns (e.g., "u.name")
+            if '.' in col:
+                table_alias, field = col.split('.', 1)
+                project[field] = 1
+            else:
+                project[col] = 1
+        pipeline.append({"$project": project})
+
+    return {
+        "collection": main_table,
+        "operation": "aggregate",
+        "pipeline": pipeline
+    }
+
+
+def sql_create_table_to_mongo(sql_query: str):
+    """
+    Convert CREATE TABLE to MongoDB createCollection command.
+
+    Example:
+      CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100), age INT)
+      => {
+           "operation": "createCollection",
+           "collection": "users",
+           "schema": {
+             "id": "INT",
+             "name": "VARCHAR(100)",
+             "age": "INT"
+           },
+           "validator": {
+             "$jsonSchema": {
+               "bsonType": "object",
+               "required": ["id"],
+               "properties": {
+                 "id": {"bsonType": "int"},
+                 "name": {"bsonType": "string"},
+                 "age": {"bsonType": "int"}
+               }
+             }
+           }
+         }
+
+    :param sql_query: The SQL CREATE TABLE query as a string.
+    :return: A MongoDB createCollection command dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    table_name, columns_def = parse_create_table_statement(statement)
+
+    if not table_name:
+        return {}
+
+    # Build MongoDB schema validator
+    properties = {}
+    required = []
+
+    for col_name, col_type, constraints in columns_def:
+        # Map SQL types to BSON types
+        bson_type = map_sql_type_to_bson(col_type)
+        properties[col_name] = {"bsonType": bson_type}
+
+        # Check for PRIMARY KEY or NOT NULL
+        if 'PRIMARY KEY' in constraints.upper() or 'NOT NULL' in constraints.upper():
+            required.append(col_name)
+
+    result = {
+        "operation": "createCollection",
+        "collection": table_name,
+        "schema": {col[0]: col[1] for col in columns_def}
+    }
+
+    if properties:
+        result["validator"] = {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": required if required else [],
+                "properties": properties
+            }
+        }
+
+    return result
+
+
+def parse_create_table_statement(statement):
+    """
+    Parse CREATE TABLE statement.
+
+    Returns:
+      table_name, columns_definition
+
+    :param statement: The parsed SQL statement.
+    :return: A tuple containing table_name and columns definition.
+    """
+    table_name = None
+    columns_def = []
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Find TABLE keyword
+        if token.ttype is Keyword and token.value.upper() == "TABLE":
+            # Next token should be table name
+            if i + 1 < len(tokens):
+                i += 1
+                next_token = tokens[i]
+                if isinstance(next_token, Identifier):
+                    table_name = str(next_token.get_real_name()).strip()
+                else:
+                    table_name = str(next_token).strip()
+            i += 1
+            continue
+
+        # Find column definitions in parentheses
+        if isinstance(token, Parenthesis):
+            columns_def = parse_column_definitions(str(token))
+            i += 1
+            continue
+
+        i += 1
+
+    return table_name, columns_def
+
+
+def parse_column_definitions(columns_text: str):
+    """
+    Parse column definitions from CREATE TABLE.
+
+    :param columns_text: The columns definition text.
+    :return: A list of tuples (column_name, data_type, constraints).
+    """
+    # Remove outer parentheses
+    if columns_text.startswith('(') and columns_text.endswith(')'):
+        columns_text = columns_text[1:-1]
+
+    columns = []
+    # Split by comma (simple approach)
+    parts = columns_text.split(',')
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # Parse: column_name data_type [constraints]
+        tokens = part.split(None, 2)
+        if len(tokens) >= 2:
+            col_name = tokens[0].strip()
+            col_type = tokens[1].strip()
+            constraints = tokens[2] if len(tokens) > 2 else ""
+            columns.append((col_name, col_type, constraints))
+
+    return columns
+
+
+def map_sql_type_to_bson(sql_type: str) -> str:
+    """
+    Map SQL data types to BSON types.
+
+    :param sql_type: The SQL data type.
+    :return: The corresponding BSON type.
+    """
+    sql_type_upper = sql_type.upper()
+
+    if 'INT' in sql_type_upper or 'SERIAL' in sql_type_upper:
+        return 'int'
+    elif 'BIGINT' in sql_type_upper:
+        return 'long'
+    elif 'DECIMAL' in sql_type_upper or 'NUMERIC' in sql_type_upper:
+        return 'decimal'
+    elif 'FLOAT' in sql_type_upper or 'DOUBLE' in sql_type_upper or 'REAL' in sql_type_upper:
+        return 'double'
+    elif 'BOOL' in sql_type_upper:
+        return 'bool'
+    elif 'DATE' in sql_type_upper or 'TIME' in sql_type_upper:
+        return 'date'
+    elif 'CHAR' in sql_type_upper or 'TEXT' in sql_type_upper or 'VARCHAR' in sql_type_upper:
+        return 'string'
+    elif 'BLOB' in sql_type_upper or 'BINARY' in sql_type_upper:
+        return 'binData'
+    else:
+        return 'string'  # Default
+
+
+def sql_create_index_to_mongo(sql_query: str):
+    """
+    Convert CREATE INDEX to MongoDB createIndex command.
+
+    Example:
+      CREATE INDEX idx_name ON users (name)
+      => {
+           "operation": "createIndex",
+           "collection": "users",
+           "index": {"name": 1},
+           "indexName": "idx_name"
+         }
+
+    :param sql_query: The SQL CREATE INDEX query as a string.
+    :return: A MongoDB createIndex command dict.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return {}
+
+    statement = parsed[0]
+    index_name, table_name, columns = parse_create_index_statement(statement)
+
+    if not table_name or not columns:
+        return {}
+
+    # Build index specification
+    index_spec = {}
+    for col in columns:
+        col = col.strip()
+        # Check for DESC
+        if col.upper().endswith(' DESC'):
+            col = col[:-5].strip()
+            index_spec[col] = -1
+        elif col.upper().endswith(' ASC'):
+            col = col[:-4].strip()
+            index_spec[col] = 1
+        else:
+            index_spec[col] = 1
+
+    result = {
+        "operation": "createIndex",
+        "collection": table_name,
+        "index": index_spec
+    }
+
+    if index_name:
+        result["indexName"] = index_name
+
+    return result
+
+
+def parse_create_index_statement(statement):
+    """
+    Parse CREATE INDEX statement.
+
+    Returns:
+      index_name, table_name, columns
+
+    :param statement: The parsed SQL statement.
+    :return: A tuple containing index_name, table_name, and columns.
+    """
+    index_name = None
+    table_name = None
+    columns = []
+
+    tokens = [t for t in statement.tokens if not t.is_whitespace]
+
+    for i, token in enumerate(tokens):
+        # Get index name after INDEX keyword
+        if i > 0 and tokens[i-1].ttype is Keyword and tokens[i-1].value.upper() == "INDEX":
+            if token.ttype is not Keyword:
+                index_name = str(token).strip()
+
+        # Get table and columns after ON keyword
+        if i > 0 and tokens[i-1].ttype is Keyword and tokens[i-1].value.upper() == "ON":
+            # Could be a Function like "users (name)"
+            if isinstance(token, Function):
+                func_str = str(token)
+                if '(' in func_str:
+                    table_name = func_str.split('(')[0].strip()
+                    cols_part = func_str[func_str.index('(')+1:func_str.rindex(')')]
+                    columns = [c.strip() for c in cols_part.split(',')]
+                else:
+                    table_name = func_str.strip()
+            elif isinstance(token, Identifier):
+                table_name = str(token).strip()
+            else:
+                table_name = str(token).strip()
+
+    return index_name, table_name, columns

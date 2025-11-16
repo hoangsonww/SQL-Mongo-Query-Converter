@@ -30,8 +30,8 @@ class TestSQLValidation:
             QueryValidator.validate_sql_query("DROP TABLE users")
 
     def test_dangerous_keyword_delete(self):
-        """Test dangerous DELETE keyword detection."""
-        with pytest.raises(ValidationError, match="Dangerous keyword"):
+        """Test DELETE keyword detection (now treated as write operation)."""
+        with pytest.raises(ValidationError, match="Write operation keyword"):
             QueryValidator.validate_sql_query("DELETE FROM users WHERE id = 1")
 
     def test_dangerous_keyword_truncate(self):

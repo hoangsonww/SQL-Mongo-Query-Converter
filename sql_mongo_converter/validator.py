@@ -15,12 +15,14 @@ logger = get_logger(__name__)
 class QueryValidator:
     """Validator for SQL and MongoDB queries."""
 
-    # Dangerous SQL keywords that could indicate SQL injection
+    # Truly dangerous SQL keywords that should always be blocked
     DANGEROUS_SQL_KEYWORDS = [
-        'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
-        'INSERT', 'UPDATE', 'EXEC', 'EXECUTE', 'GRANT',
-        'REVOKE', 'SHUTDOWN', 'xp_', 'sp_'
+        'DROP', 'TRUNCATE', 'ALTER', 'EXEC', 'EXECUTE',
+        'GRANT', 'REVOKE', 'SHUTDOWN', 'xp_', 'sp_'
     ]
+
+    # Write operation keywords - allowed when mutations are enabled
+    MUTATION_KEYWORDS = ['INSERT', 'UPDATE', 'DELETE', 'CREATE']
 
     # Maximum query length to prevent DoS
     MAX_QUERY_LENGTH = 10000
@@ -55,21 +57,40 @@ class QueryValidator:
                 query=query[:100] + "..."
             )
 
-        # Check for dangerous keywords
+        # Check for truly dangerous keywords (always blocked)
+        for keyword in QueryValidator.DANGEROUS_SQL_KEYWORDS:
+            if keyword in query_upper:
+                raise ValidationError(
+                    f"Dangerous keyword '{keyword}' detected in query",
+                    query=query,
+                    details={'keyword': keyword}
+                )
+
+        # Check for mutation keywords when mutations are not allowed
         if not allow_mutations:
-            for keyword in QueryValidator.DANGEROUS_SQL_KEYWORDS:
+            for keyword in QueryValidator.MUTATION_KEYWORDS:
                 if keyword in query_upper:
                     raise ValidationError(
-                        f"Dangerous keyword '{keyword}' detected in query",
+                        f"Write operation keyword '{keyword}' detected in query. "
+                        "Use allow_mutations=True to enable write operations.",
                         query=query,
                         details={'keyword': keyword}
                     )
 
         # Validate basic SQL structure
-        if not query_upper.startswith('SELECT'):
-            if not allow_mutations or not any(query_upper.startswith(kw) for kw in ['INSERT', 'UPDATE', 'DELETE']):
+        valid_start_keywords = ['SELECT']
+        if allow_mutations:
+            valid_start_keywords.extend(['INSERT', 'UPDATE', 'DELETE'])
+
+        if not any(query_upper.startswith(kw) for kw in valid_start_keywords):
+            if allow_mutations:
                 raise ValidationError(
-                    "Query must start with SELECT (or INSERT/UPDATE/DELETE if mutations allowed)",
+                    "Query must start with SELECT, INSERT, UPDATE, or DELETE",
+                    query=query
+                )
+            else:
+                raise ValidationError(
+                    "Query must start with SELECT (use allow_mutations=True for write operations)",
                     query=query
                 )
 
@@ -168,9 +189,13 @@ class QueryValidator:
             '$regex', '$mod', '$text', '$where',
             # Array
             '$all', '$elemMatch', '$size',
+            # Update operators
+            '$set', '$unset', '$inc', '$mul', '$rename', '$setOnInsert',
+            '$push', '$pull', '$addToSet', '$pop', '$pullAll',
+            '$currentDate', '$min', '$max',
             # Aggregation
             '$group', '$match', '$project', '$sort', '$limit', '$skip',
-            '$unwind', '$lookup', '$sum', '$avg', '$min', '$max', '$count'
+            '$unwind', '$lookup', '$sum', '$avg', '$count'
         }
 
         def check_operators(obj: Any, path: str = ""):
