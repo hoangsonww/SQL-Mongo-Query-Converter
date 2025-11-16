@@ -10,8 +10,8 @@ with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="sql_mongo_converter",
-    version="2.0.0",
-    description="Production-ready converter for SQL and MongoDB queries with validation, logging, and CLI",
+    version="2.1.0",
+    description="Production-ready converter for SQL and MongoDB queries with full CRUD operations, JOINs, and advanced SQL support",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Son Nguyen",
