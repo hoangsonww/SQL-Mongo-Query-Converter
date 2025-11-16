@@ -5,7 +5,8 @@ from .sql_to_mongo import (
     sql_delete_to_mongo,
     sql_join_to_mongo,
     sql_create_table_to_mongo,
-    sql_create_index_to_mongo
+    sql_create_index_to_mongo,
+    sql_drop_to_mongo
 )
 from .mongo_to_sql import (
     mongo_find_to_sql,
@@ -62,6 +63,9 @@ def sql_to_mongo(sql_query: str, allow_mutations: bool = True):
 
     elif query_upper.startswith('CREATE INDEX'):
         return sql_create_index_to_mongo(sql_query)
+
+    elif query_upper.startswith('DROP'):
+        return sql_drop_to_mongo(sql_query)
 
     else:
         raise ValueError(f"Unsupported SQL operation: {sql_query[:50]}...")
