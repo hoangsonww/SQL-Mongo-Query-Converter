@@ -1,0 +1,35 @@
+[MASTER]
+ignore=.git,__pycache__,build,dist,.venv,venv
+jobs=0
+
+[MESSAGES CONTROL]
+disable=
+    C0103,  # Invalid name
+    C0114,  # Missing module docstring
+    C0115,  # Missing class docstring
+    C0116,  # Missing function docstring
+    R0913,  # Too many arguments
+    R0914,  # Too many local variables
+    W0212,  # Protected access
+
+[FORMAT]
+max-line-length=100
+indent-string='    '
+
+[DESIGN]
+max-args=7
+max-attributes=10
+max-bool-expr=5
+max-branches=12
+max-locals=15
+max-parents=7
+max-public-methods=20
+max-returns=6
+max-statements=50
+min-public-methods=1
+
+[SIMILARITIES]
+min-similarity-lines=4
+ignore-comments=yes
+ignore-docstrings=yes
+ignore-imports=yes

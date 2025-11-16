@@ -1,0 +1,210 @@
+"""
+Comprehensive tests for SQL to MongoDB conversion.
+"""
+
+import pytest
+from sql_mongo_converter import sql_to_mongo
+from sql_mongo_converter.exceptions import SQLParseError, ValidationError
+
+
+class TestBasicSQLToMongo:
+    """Test basic SQL to MongoDB conversions."""
+
+    def test_simple_select_all(self, sample_sql_queries):
+        """Test SELECT * FROM table conversion."""
+        result = sql_to_mongo(sample_sql_queries['basic_select'])
+        assert result['collection'] == 'users'
+        assert result['find'] == {}
+        assert result['projection'] == {}
+
+    def test_select_with_columns(self, sample_sql_queries):
+        """Test SELECT with specific columns."""
+        result = sql_to_mongo(sample_sql_queries['with_where'])
+        assert 'name' in result['projection']
+        assert 'email' in result['projection']
+
+    def test_select_with_where(self, sample_sql_queries):
+        """Test SELECT with WHERE clause."""
+        result = sql_to_mongo(sample_sql_queries['with_where'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+        assert result['find']['age']['$gt'] == 25
+
+    def test_select_with_and(self, sample_sql_queries):
+        """Test SELECT with AND conditions."""
+        result = sql_to_mongo(sample_sql_queries['with_and'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+        assert 'status' in result['find']
+        assert result['find']['age']['$gt'] == 25
+        assert result['find']['status'] == 'active'
+
+    def test_select_with_order_by(self, sample_sql_queries):
+        """Test SELECT with ORDER BY."""
+        result = sql_to_mongo(sample_sql_queries['with_order'])
+        assert 'sort' in result
+        assert result['sort'] == [('age', -1)]
+
+    def test_select_with_limit(self, sample_sql_queries):
+        """Test SELECT with LIMIT."""
+        result = sql_to_mongo(sample_sql_queries['with_limit'])
+        assert result['limit'] == 10
+
+    def test_complex_query(self, sample_sql_queries):
+        """Test complex query with multiple clauses."""
+        result = sql_to_mongo(sample_sql_queries['complex'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+        assert 'status' in result['find']
+        assert 'sort' in result
+        assert result['limit'] == 100
+
+
+class TestSQLOperators:
+    """Test various SQL operators."""
+
+    def test_greater_than(self):
+        """Test > operator."""
+        result = sql_to_mongo("SELECT * FROM users WHERE age > 25")
+        assert result['find']['age']['$gt'] == 25
+
+    def test_less_than(self):
+        """Test < operator."""
+        result = sql_to_mongo("SELECT * FROM users WHERE age < 65")
+        assert result['find']['age']['$lt'] == 65
+
+    def test_greater_equal(self):
+        """Test >= operator."""
+        result = sql_to_mongo("SELECT * FROM users WHERE age >= 18")
+        assert result['find']['age']['$gte'] == 18
+
+    def test_less_equal(self):
+        """Test <= operator."""
+        result = sql_to_mongo("SELECT * FROM users WHERE age <= 100")
+        assert result['find']['age']['$lte'] == 100
+
+    def test_equality(self):
+        """Test = operator."""
+        result = sql_to_mongo("SELECT * FROM users WHERE status = 'active'")
+        assert result['find']['status'] == 'active'
+
+    def test_multiple_operators(self, sample_sql_queries):
+        """Test multiple operators in one query."""
+        result = sql_to_mongo(sample_sql_queries['multiple_conditions'])
+        assert result['find']['price']['$gt'] == 100
+        assert result['find']['price']['$lt'] == 500
+        assert result['find']['category'] == 'electronics'
+
+
+class TestDataTypes:
+    """Test handling of different data types."""
+
+    def test_string_values(self, sample_sql_queries):
+        """Test string value handling."""
+        result = sql_to_mongo(sample_sql_queries['with_string'])
+        assert result['find']['name'] == 'John Doe'
+
+    def test_integer_values(self):
+        """Test integer value handling."""
+        result = sql_to_mongo("SELECT * FROM users WHERE age > 25")
+        assert result['find']['age']['$gt'] == 25
+        assert isinstance(result['find']['age']['$gt'], int)
+
+    def test_float_values(self, sample_sql_queries):
+        """Test float value handling."""
+        result = sql_to_mongo(sample_sql_queries['with_numbers'])
+        assert result['find']['total']['$gte'] == 50.5
+        assert isinstance(result['find']['total']['$gte'], float)
+
+
+class TestEdgeCases:
+    """Test edge cases and special scenarios."""
+
+    def test_query_with_newlines(self, edge_case_queries):
+        """Test query with newlines."""
+        result = sql_to_mongo(edge_case_queries['sql_with_newlines'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+
+    def test_lowercase_query(self, edge_case_queries):
+        """Test lowercase SQL query."""
+        result = sql_to_mongo(edge_case_queries['sql_lowercase'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+
+    def test_mixed_case_query(self, edge_case_queries):
+        """Test mixed case SQL query."""
+        result = sql_to_mongo(edge_case_queries['sql_mixed_case'])
+        assert result['collection'] == 'users'
+
+    def test_extra_spaces(self, edge_case_queries):
+        """Test query with extra spaces."""
+        result = sql_to_mongo(edge_case_queries['sql_extra_spaces'])
+        assert result['collection'] == 'users'
+        assert 'age' in result['find']
+
+    def test_order_by_asc(self):
+        """Test ORDER BY ASC."""
+        result = sql_to_mongo("SELECT * FROM users ORDER BY age ASC")
+        assert result['sort'] == [('age', 1)]
+
+    def test_order_by_desc(self):
+        """Test ORDER BY DESC."""
+        result = sql_to_mongo("SELECT * FROM users ORDER BY age DESC")
+        assert result['sort'] == [('age', -1)]
+
+
+class TestGroupBy:
+    """Test GROUP BY functionality."""
+
+    def test_simple_group_by(self, sample_sql_queries):
+        """Test simple GROUP BY."""
+        result = sql_to_mongo(sample_sql_queries['with_group'])
+        assert 'group' in result
+        assert result['group'] == {'_id': '$department'}
+
+    def test_group_by_with_multiple_fields(self):
+        """Test GROUP BY with multiple fields."""
+        result = sql_to_mongo("SELECT department, status FROM employees GROUP BY department, status")
+        assert 'group' in result
+
+
+class TestErrorHandling:
+    """Test error handling for invalid queries."""
+
+    def test_empty_query(self):
+        """Test empty query handling."""
+        with pytest.raises(Exception):
+            sql_to_mongo("")
+
+    def test_none_query(self):
+        """Test None query handling."""
+        with pytest.raises(Exception):
+            sql_to_mongo(None)
+
+    def test_non_string_query(self):
+        """Test non-string query handling."""
+        with pytest.raises(Exception):
+            sql_to_mongo(123)
+
+
+class TestProjections:
+    """Test column projections."""
+
+    def test_single_column(self):
+        """Test single column projection."""
+        result = sql_to_mongo("SELECT name FROM users")
+        assert 'name' in result['projection']
+        assert result['projection']['name'] == 1
+
+    def test_multiple_columns(self):
+        """Test multiple column projection."""
+        result = sql_to_mongo("SELECT name, email, age FROM users")
+        assert 'name' in result['projection']
+        assert 'email' in result['projection']
+        assert 'age' in result['projection']
+
+    def test_wildcard_projection(self):
+        """Test wildcard (*) projection."""
+        result = sql_to_mongo("SELECT * FROM users")
+        assert result['projection'] == {}
