@@ -521,11 +521,19 @@ def parse_limit_value(token):
 
 def convert_value(val: str):
     """
-    Convert a value to an int, float, or string.
+    Convert a SQL literal to Python/Mongo value.
+
+    Supports SQL NULL -> None.
 
     :param val: The value to convert.
-    :return: The value as an int, float, or string.
+    :return: The value as None, int, float, or string.
     """
+    if val is None:
+        return None
+
+    if isinstance(val, str) and val.strip().upper() == "NULL":
+        return None
+
     try:
         return int(val)
     except ValueError:
