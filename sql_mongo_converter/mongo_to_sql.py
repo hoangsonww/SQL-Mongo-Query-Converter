@@ -137,7 +137,9 @@ def build_basic_conditions(condition_dict: dict) -> str:
                     clauses.append(clause)
         else:
             # direct equality
-            if isinstance(expr, (int, float)):
+            if expr is None:
+                clauses.append(f"{field} IS NULL")
+            elif isinstance(expr, (int, float)):
                 clauses.append(f"{field} = {expr}")
             else:
                 clauses.append(f"{field} = '{escape_quotes(str(expr))}'")
@@ -152,14 +154,47 @@ def convert_operator(field: str, op: str, val):
     :param field: The field name.
     :param op: The operator (e.g., "$gt", "$in").
     """
+    # NULL comparisons must use IS / IS NOT in SQL.
+    if op == "$eq" and val is None:
+        return f"{field} IS NULL"
+    if op == "$ne" and val is None:
+        return f"{field} IS NOT NULL"
+
+    if op in {"$in", "$nin"}:
+        values = val if isinstance(val, list) else []
+        has_null = any(item is None for item in values)
+        non_null_values = [item for item in values if item is not None]
+
+        if op == "$in":
+            if not non_null_values and has_null:
+                return f"{field} IS NULL"
+            if not non_null_values:
+                return "1 = 0"
+
+            non_null_sql = ", ".join(quote_if_needed(item) for item in non_null_values)
+            if has_null:
+                return f"({field} IN ({non_null_sql}) OR {field} IS NULL)"
+            return f"{field} IN ({non_null_sql})"
+
+        # $nin
+        if not non_null_values and has_null:
+            return f"{field} IS NOT NULL"
+        if not non_null_values:
+            return "1 = 1"
+
+        non_null_sql = ", ".join(quote_if_needed(item) for item in non_null_values)
+        if has_null:
+            return f"({field} NOT IN ({non_null_sql}) AND {field} IS NOT NULL)"
+        return f"{field} NOT IN ({non_null_sql})"
+
     # Convert val to string with quotes if needed
     if isinstance(val, (int, float)):
         val_str = str(val)
+    elif val is None:
+        val_str = "NULL"
     elif isinstance(val, list):
-        # handle lists for $in, $nin
         val_str = ", ".join(quote_if_needed(item) for item in val)
     else:
-        # string or other
         val_str = f"'{escape_quotes(str(val))}'"
 
     op_map = {
@@ -176,11 +211,6 @@ def convert_operator(field: str, op: str, val):
         sql_op = op_map[op]
         # e.g. "field > 30" or "field LIKE '%abc%'"
         return f"{field} {sql_op} {val_str}"
-    elif op == "$in":
-        # e.g. field IN (1,2,3)
-        return f"{field} IN ({val_str})"
-    elif op == "$nin":
-        return f"{field} NOT IN ({val_str})"
     else:
         # fallback
         return f"{field} /*unknown op {op}*/ {val_str}"
@@ -212,6 +242,8 @@ def quote_if_needed(val):
     :param val: The value to quote if it's a string.
     :return: The value as a string, quoted if it's a string.
     """
+    if val is None:
+        return "NULL"
     if isinstance(val, (int, float)):
         return str(val)
     return f"'{escape_quotes(str(val))}'"
@@ -256,10 +288,7 @@ def mongo_insert_to_sql(mongo_obj: dict) -> str:
         values = []
         for col in columns:
             val = document[col]
-            if isinstance(val, (int, float)):
-                values.append(str(val))
-            else:
-                values.append(f"'{escape_quotes(str(val))}'")
+            values.append(quote_if_needed(val))
 
         cols_str = ", ".join(columns)
         vals_str = ", ".join(values)
@@ -279,10 +308,7 @@ def mongo_insert_to_sql(mongo_obj: dict) -> str:
             values = []
             for col in columns:
                 val = doc.get(col)
-                if isinstance(val, (int, float)):
-                    values.append(str(val))
-                else:
-                    values.append(f"'{escape_quotes(str(val))}'")
+                values.append(quote_if_needed(val))
             all_values.append(f"({', '.join(values)})")
 
         return f"INSERT INTO {collection} ({cols_str}) VALUES {', '.join(all_values)};"
@@ -320,10 +346,7 @@ def mongo_update_to_sql(mongo_obj: dict) -> str:
     # Build SET clause
     set_parts = []
     for field, value in set_clause.items():
-        if isinstance(value, (int, float)):
-            set_parts.append(f"{field} = {value}")
-        else:
-            set_parts.append(f"{field} = '{escape_quotes(str(value))}'")
+        set_parts.append(f"{field} = {quote_if_needed(value)}")
 
     set_sql = ", ".join(set_parts)
 
